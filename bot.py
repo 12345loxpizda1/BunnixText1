@@ -1,4 +1,4 @@
-"""BunnixText — по кнопке страны присылает случайную фразу из заготовок (phrases.json)."""
+"""BunnixText — по кнопке страны (панель внизу чата) присылает случайную фразу из заготовок (phrases.json)."""
 import json
 import os
 import random
@@ -20,9 +20,16 @@ with open(os.path.join(HERE, 'phrases.json'), encoding='utf-8') as f:
     PHRASES = json.load(f)
 for _code in COUNTRIES:
     assert len(PHRASES.get(_code, [])) >= 1, f'no phrases for {_code}'
-FLAGS = ('🇫🇷', '🇮🇹', '🇬🇧', '🇦🇺', '🇩🇪', '🇪🇸', '🇵🇹', '🇧🇪', '🇨🇿', '🇷🇴', '🇸🇰', '🇬🇷', '🇦🇹', '🇳🇴', '🇩🇰', '🇸🇪', '🇳🇱')
-KEYS = [{'text': f'{flag} {code}', 'callback_data': f'demo:{code}'} for code, flag in zip(COUNTRIES, FLAGS)]
-MENU = {'inline_keyboard': [KEYS[i:i+3] for i in range(0, len(KEYS), 3)]}
+FLAGS = ('🇫', '🇮', '🇬', '🇦', '🇩', '🇪', '🇵', '🇧', '🇨', '🇷🇴', '🇸🇰', '🇬🇷', '🇦🇹', '🇳🇴', '🇩🇰', '🇸🇪', '🇳🇱')
+
+# Кнопки-страны в панели интерфейса (reply keyboard), 3 в ряд.
+LABELS = [f'{flag} {code}' for code, flag in zip(COUNTRIES, FLAGS)]
+LABEL2CODE = dict(zip(LABELS, COUNTRIES))
+KEYBOARD = {
+    'keyboard': [[{'text': LABELS[i]} for i in range(j, min(j + 3, len(LABELS)))] for j in range(0, len(LABELS), 3)],
+    'resize_keyboard': True,
+}
+
 
 def api(method, **data):
     req = urllib.request.Request(BASE + method, data=json.dumps(data).encode(), headers={'Content-Type': 'application/json'})
@@ -32,31 +39,44 @@ def api(method, **data):
         raise RuntimeError('Telegram API request failed')
     return result['result']
 
+
 def delete_demo(chat_id, message_id):
     try:
         api('deleteMessage', chat_id=chat_id, message_id=message_id)
     except Exception:
         pass
 
-def handle(update):
-    message = update.get('message', {})
-    if message.get('chat', {}).get('type') == 'private' and message.get('text', '').split(' ', 1)[0] == '/start':
-        api('sendMessage', chat_id=message['chat']['id'], text='BunnixText. Выберите страну:', reply_markup=MENU)
-    query = update.get('callback_query')
-    if not query:
-        return
-    api('answerCallbackQuery', callback_query_id=query['id'])
-    chat = query.get('message', {}).get('chat', {})
-    code = query.get('data', '').removeprefix('demo:')
-    if chat.get('type') != 'private' or code not in COUNTRIES:
-        return
+
+def send_phrase(chat_id, code):
     text = random.choice(PHRASES[code])
     if LINK:
         text += '\n' + LINK
-    sent = api('sendMessage', chat_id=chat['id'], text=text)
-    timer = threading.Timer(120, delete_demo, args=(chat['id'], sent['message_id']))
+    sent = api('sendMessage', chat_id=chat_id, text=text)
+    timer = threading.Timer(120, delete_demo, args=(chat_id, sent['message_id']))
     timer.daemon = True
     timer.start()
+
+
+def handle(update):
+    message = update.get('message', {})
+    chat = message.get('chat', {})
+    if chat.get('type') == 'private':
+        text = message.get('text', '')
+        if text.split(' ', 1)[0] == '/start':
+            # Приветствие + показываем панель кнопок стран внизу чата.
+            api('sendMessage', chat_id=chat['id'], text='BunnixText. Выберите страну:', reply_markup=KEYBOARD)
+        elif text in LABEL2CODE:
+            # Нажата кнопка страны в панели.
+            send_phrase(chat['id'], LABEL2CODE[text])
+    # Старые inline-кнопки из истории сообщений (если кто-то нажмёт).
+    query = update.get('callback_query')
+    if query:
+        api('answerCallbackQuery', callback_query_id=query['id'])
+        qchat = query.get('message', {}).get('chat', {})
+        code = query.get('data', '').removeprefix('demo:')
+        if qchat.get('type') == 'private' and code in COUNTRIES:
+            send_phrase(qchat['id'], code)
+
 
 def main():
     print('BunnixText started.', flush=True)
@@ -80,6 +100,7 @@ def main():
         except Exception as exc:
             print('Polling retry:', type(exc).__name__, flush=True)
             time.sleep(5)
+
 
 if __name__ == '__main__':
     main()
